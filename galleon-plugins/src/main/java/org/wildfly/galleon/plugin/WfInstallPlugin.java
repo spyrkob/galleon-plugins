@@ -63,7 +63,7 @@ import javax.xml.transform.dom.DOMSource;
 import javax.xml.transform.stream.StreamResult;
 import javax.xml.transform.stream.StreamSource;
 
-
+import com.redhat.prospero.ProsperoArtifactResolver;
 import org.jboss.galleon.Errors;
 import org.jboss.galleon.MessageWriter;
 import org.jboss.galleon.ProvisioningException;
@@ -146,6 +146,9 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
             .setBooleanValueSet()
             .build();
     private static final ProvisioningOption OPTION_OVERRIDDEN_ARTIFACTS = ProvisioningOption.builder("jboss-overridden-artifacts").setPersistent(true).build();
+    private static final ProvisioningOption OPTION_USE_PROSPERO = ProvisioningOption.builder("use-prospero").setBooleanValueSet().build();
+    private static final ProvisioningOption OPTION_PROSPERO_CHANNEL = ProvisioningOption.builder("prospero-channel").setPersistent(false).build();
+    private static final ProvisioningOption OPTION_PROSPERO_CHANNELS_FILE = ProvisioningOption.builder("prospero-channels-file").build();
     private ProvisioningRuntime runtime;
     MessageWriter log;
 
@@ -155,6 +158,7 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
     private Map<ProducerSpec, Map<String, String>> fpTasksProps = Collections.emptyMap();
     private Map<String, String> mergedTaskProps = new HashMap<>();
     private PropertyResolver mergedTaskPropsResolver;
+    private ProsperoArtifactResolver prospero;
 
     private boolean thinServer;
 
@@ -190,7 +194,8 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
     protected List<ProvisioningOption> initPluginOptions() {
         return Arrays.asList(OPTION_MVN_DIST, OPTION_DUMP_CONFIG_SCRIPTS,
                 OPTION_FORK_EMBEDDED, OPTION_MVN_REPO, OPTION_JAKARTA_TRANSFORM_ARTIFACTS,
-                OPTION_MVN_PROVISIONING_REPO, OPTION_JAKARTA_TRANSFORM_ARTIFACTS_VERBOSE, OPTION_OVERRIDDEN_ARTIFACTS);
+                OPTION_MVN_PROVISIONING_REPO, OPTION_JAKARTA_TRANSFORM_ARTIFACTS_VERBOSE, OPTION_OVERRIDDEN_ARTIFACTS,
+                OPTION_USE_PROSPERO, OPTION_PROSPERO_CHANNEL, OPTION_PROSPERO_CHANNELS_FILE);
     }
 
     public ProvisioningRuntime getRuntime() {
@@ -286,6 +291,17 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
             final Path wfRes = fp.getResource(WfConstants.WILDFLY);
             if(!Files.exists(wfRes)) {
                 continue;
+            }
+
+            if (runtime.isOptionSet(OPTION_USE_PROSPERO)) {
+                if (runtime.isOptionSet(OPTION_PROSPERO_CHANNEL)) {
+                    String channel = runtime.getOptionValue(OPTION_PROSPERO_CHANNEL);
+                    prospero = new ProsperoArtifactResolver(wfRes.resolve("streams.properties"), channel);
+                }
+                else if (runtime.isOptionSet(OPTION_PROSPERO_CHANNELS_FILE)) {
+
+                    prospero = new ProsperoArtifactResolver(wfRes.resolve("streams.properties"), Paths.get(runtime.getOptionValue(OPTION_PROSPERO_CHANNELS_FILE)));
+                }
             }
 
             final Path artifactProps = wfRes.resolve(WfConstants.ARTIFACT_VERSIONS_PROPS);
@@ -478,6 +494,10 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
 
         if(!exampleConfigs.isEmpty()) {
             provisionExampleConfigs(transformableFeaturePack);
+        }
+
+        if (runtime.isOptionSet(OPTION_USE_PROSPERO)) {
+            prospero.writeManifestFile(runtime, mergedArtifactVersions, runtime.getOptionValue(OPTION_PROSPERO_CHANNEL));
         }
 
         if (startTime > 0) {
@@ -1086,7 +1106,12 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
     }
 
     void resolveMaven(MavenArtifact artifact) throws ProvisioningException {
-        maven.resolve(artifact);
+        // if (prospero enabled)
+        if (runtime.isOptionSet(OPTION_USE_PROSPERO)) {
+            prospero.resolve(artifact);
+        } else {
+            maven.resolve(artifact);
+        }
     }
 
     void resolveMaven(MavenArtifact artifact, String suffix) throws ProvisioningException {
