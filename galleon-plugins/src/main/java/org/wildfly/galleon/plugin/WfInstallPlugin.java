@@ -296,11 +296,11 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
             if (runtime.isOptionSet(OPTION_USE_PROSPERO)) {
                 if (runtime.isOptionSet(OPTION_PROSPERO_CHANNEL)) {
                     String channel = runtime.getOptionValue(OPTION_PROSPERO_CHANNEL);
-                    prospero = new ProsperoArtifactResolver(wfRes.resolve("streams.properties"), channel);
+                    prospero = new ProsperoArtifactResolver(channel);
                 }
                 else if (runtime.isOptionSet(OPTION_PROSPERO_CHANNELS_FILE)) {
 
-                    prospero = new ProsperoArtifactResolver(wfRes.resolve("streams.properties"), Paths.get(runtime.getOptionValue(OPTION_PROSPERO_CHANNELS_FILE)));
+                    prospero = new ProsperoArtifactResolver(Paths.get(runtime.getOptionValue(OPTION_PROSPERO_CHANNELS_FILE)));
                 }
             }
 
