@@ -27,6 +27,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.TreeMap;
@@ -99,6 +100,8 @@ public class ArtifactListBuilder {
         return Hex.encodeHexString(hash);
     }
 
+    private HashSet<ArtifactCoords> allArtifacts = new HashSet<>();
+
     public Path add(ArtifactCoords coords) throws ProvisioningException, ArtifactDescriptorException, IOException {
         debug("Add artifact %s:%s:%s", coords.getGroupId(), coords.getArtifactId(), coords.getVersion());
         Path artifactLocalPath = resolveArtifact(coords);
@@ -115,6 +118,7 @@ public class ArtifactListBuilder {
             ArtifactCoords parentCoords = new ArtifactCoords(artifactParent.getGroupId(), artifactParent.getArtifactId(), artifactParent.getVersion(), null, "pom");
             add(parentCoords);
         }
+        allArtifacts.add(coords);
         addArtifact(artifactLocalPath);
         addArtifact(pomFile);
         return artifactLocalPath;
@@ -155,6 +159,27 @@ public class ArtifactListBuilder {
             builder.append(entry.getValue()).append(",").append(entry.getKey()).append(System.lineSeparator());
         }
 
+        return builder.toString();
+    }
+
+    public String buildChannel() {
+        StringBuilder builder = new StringBuilder();
+        builder.append("streams:").append(System.lineSeparator());
+        String indent = "  ";
+        for (ArtifactCoords allArtifact : allArtifacts) {
+            if (allArtifact.getExtension().equals("pom")) {
+                System.out.println("skipping " + allArtifact);
+                continue;
+            }
+            builder.append(indent).append("- groupId: \"").append(allArtifact.getGroupId()).append("\"").append(System.lineSeparator());
+            builder.append(indent).append("  artifactId: \"").append(allArtifact.getArtifactId()).append("\"").append(System.lineSeparator());
+            if (allArtifact.getVersion().contains("redhat-")) {
+                builder.append(indent).append("  versionPattern: \".*redhat-.*\"").append(System.lineSeparator());
+            } else {
+                builder.append(indent).append("  version: \"").append(allArtifact.getVersion()).append("\"").append(System.lineSeparator());
+            }
+            builder.append(System.lineSeparator());
+        }
         return builder.toString();
     }
 

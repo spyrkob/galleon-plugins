@@ -21,6 +21,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.Reader;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileVisitOption;
 import java.nio.file.FileVisitResult;
@@ -337,8 +338,11 @@ public abstract class AbstractFeaturePackBuildMojo extends AbstractMojo {
                                 projectHelper.attachArtifact(project, "zip", target.toFile());
                                 final Path offLinerTarget = Paths.get(project.getBuild().getDirectory()).resolve(artifactId + '-'
                                         + versionDir.getFileName() + "-" + ARTIFACT_LIST_CLASSIFIER + "." + ARTIFACT_LIST_EXTENSION);
+                                final Path channelTarget = Paths.get(project.getBuild().getDirectory()).resolve(artifactId + '-'
+                                        + versionDir.getFileName() + "-" + "channel.json");
                                 debug("Attaching feature-pack artifact list %s as a project artifact", offLinerTarget);
                                 Files.write(offLinerTarget, builder.build().getBytes());
+                                Files.write(channelTarget, builder.buildChannel().getBytes(StandardCharsets.UTF_8));
                                 projectHelper.attachArtifact(project, ARTIFACT_LIST_EXTENSION, ARTIFACT_LIST_CLASSIFIER, offLinerTarget.toFile());
                             }
                         }
