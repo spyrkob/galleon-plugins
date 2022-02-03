@@ -180,6 +180,8 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
 
     private String jakartaTransformSuffix;
 
+    private Map<String, MavenArtifact> cachedArtifacts = new HashMap<>();
+
     @Override
     protected List<ProvisioningOption> initPluginOptions() {
         return Arrays.asList(OPTION_MVN_DIST, OPTION_DUMP_CONFIG_SCRIPTS,
@@ -374,6 +376,26 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
                     }
                 }
             }
+
+            Map<String, MavenArtifact> allModuleArtifacts = new HashMap<>();
+            for (Map.Entry<Path, PackageRuntime> entry : jbossModules.entrySet()) {
+                final PackageRuntime pkg = entry.getValue();
+                try {
+                    allModuleArtifacts.putAll(findArtifacts(pkg, entry.getKey()));
+                } catch (IOException e) {
+                    throw new ProvisioningException("Failed to process JBoss module XML template for feature-pack "
+                                                       + pkg.getFeaturePackRuntime().getFPID() + " package " + pkg.getName(), e);
+                }
+            }
+
+            log.verbose("Preloading artifacts");
+            try {
+                resolveAll(new ArrayList<>(allModuleArtifacts.values()));
+            } catch (IOException e) {
+                throw new ProvisioningException("Failed to resolve artifact", e);
+            }
+            cachedArtifacts = allModuleArtifacts;
+            log.verbose("Finished preloading artifacts");
 
             for (Map.Entry<Path, PackageRuntime> entry : jbossModules.entrySet()) {
                 final PackageRuntime pkg = entry.getValue();
@@ -802,6 +824,54 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
         }
     }
 
+    private Map<String, MavenArtifact> findArtifacts(PackageRuntime pkg, Path moduleXmlRelativePath) throws ProvisioningException, IOException {
+        Map<String, MavenArtifact> res = new HashMap<>();
+        final Path moduleTemplate = pkg.getResource(WfConstants.PM, WfConstants.WILDFLY, WfConstants.MODULE).resolve(moduleXmlRelativePath);
+
+        final Builder builder = new Builder(false);
+        final Document document;
+        try (BufferedReader reader = Files.newBufferedReader(moduleTemplate, StandardCharsets.UTF_8)) {
+            document = builder.build(reader);
+        } catch (ParsingException e) {
+            throw new IOException("Failed to parse document", e);
+        }
+        final Element rootElement = document.getRootElement();
+
+        final Map<String, String> versionProps = fpArtifactVersions.get(pkg.getFeaturePackRuntime().getFPID().getProducer());
+
+        final Element resourcesElement = rootElement.getFirstChildElement("resources", rootElement.getNamespaceURI());
+        if (resourcesElement != null) {
+            final Elements artifacts = resourcesElement.getChildElements("artifact", rootElement.getNamespaceURI());
+            final int artifactCount = artifacts.size();
+            for (int i = 0; i < artifactCount; i++) {
+                final Element element = artifacts.get(i);
+                assert element.getLocalName().equals("artifact");
+                final Attribute attribute = element.getAttribute("name");
+                String coordsStr = attribute.getValue();
+                boolean jandex = false;
+                if (coordsStr.startsWith("${") && coordsStr.endsWith("}")) {
+                    coordsStr = coordsStr.substring(2, coordsStr.length() - 1);
+                    final int optionsIndex = coordsStr.indexOf('?');
+                    if (optionsIndex >= 0) {
+                        jandex = coordsStr.indexOf("jandex", optionsIndex) >= 0;
+                        coordsStr = coordsStr.substring(0, optionsIndex);
+                    }
+                    coordsStr = versionProps.get(coordsStr);
+                }
+
+                if (coordsStr == null) {
+                    continue;
+                }
+                try {
+                    res.put(coordsStr, Utils.toArtifactCoords(versionProps, coordsStr, false));
+                } catch (ProvisioningException e) {
+                    throw new IOException("Failed to resolve full coordinates for " + coordsStr, e);
+                }
+            }
+        }
+        return res;
+    }
+
     /**
      * A note on EE-9 transformation.
      * <ul>
@@ -895,18 +965,23 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
                 }
                 MavenArtifact artifact;
                 try {
-                    artifact = Utils.toArtifactCoords(versionProps, coordsStr, false);
+                    artifact = cachedArtifacts.get(coordsStr);
+                    if (artifact == null) {
+                        log.verbose("Artifact " + coordsStr + " not found in cache");
+
+                        artifact = Utils.toArtifactCoords(versionProps, coordsStr, false);
+                        log.verbose("Resolving %s", artifact);
+                        try {
+                            resolve(artifact);
+                        } catch (ProvisioningException e) {
+                            throw new IOException("Failed to resolve artifact " + artifact, e);
+                        }
+                    }
                 } catch (ProvisioningException e) {
                     throw new IOException("Failed to resolve full coordinates for " + coordsStr, e);
                 }
                 Path moduleArtifact;
 
-                log.verbose("Resolving %s", artifact);
-                try {
-                    resolve(artifact);
-                } catch (ProvisioningException e) {
-                    throw new IOException("Failed to resolve artifact " + artifact, e);
-                }
                 moduleArtifact = artifact.getPath();
                 if (thinServer) {
                     boolean generateMavenRepo = runtime.isOptionSet(OPTION_MVN_REPO);
@@ -1338,6 +1413,34 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
             Files.createDirectories(versionPath);
         }
         return versionPath;
+    }
+
+    private void resolveAll(List<MavenArtifact> artifacts) throws MavenUniverseException, IOException {
+        List<MavenArtifact> unresolved = new ArrayList<>();
+        if (provisioningMavenRepo != null) {
+            for (MavenArtifact artifact : artifacts) {
+
+                String grpid = artifact.getGroupId().replaceAll("\\.", Matcher.quoteReplacement(File.separator));
+                Path grpidPath = provisioningMavenRepo.resolve(grpid);
+                Path artifactidPath = grpidPath.resolve(artifact.getArtifactId());
+                String version = getTransformedVersion(artifact);
+                Path versionPath = artifactidPath.resolve(version);
+                String classifier = (artifact.getClassifier() == null || artifact.getClassifier().isEmpty()) ? null : artifact.getClassifier();
+                Path localPath = versionPath.resolve(artifact.getArtifactId() + "-"
+                                                        + version
+                                                        + (classifier == null ? "" : "-" + classifier)
+                                                        + "." + artifact.getExtension());
+
+                if (Files.exists(localPath)) {
+                    artifact.setPath(localPath);
+                } else {
+                    unresolved.add(artifact);
+                }
+            }
+        } else {
+            unresolved = artifacts;
+        }
+        maven.resolveAll(unresolved);
     }
 
     private void resolve(MavenArtifact artifact) throws MavenUniverseException, IOException {
