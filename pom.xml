@@ -114,20 +114,6 @@
         <updatePolicy>never</updatePolicy>
       </snapshots>
     </repository>
-    <repository>
-      <id>galleon-prospero-repo</id>
-      <name>Galleon Prospero Repository</name>
-      <url>https://eapdev-jenkins-csb-jbossset.apps.ocp4.prod.psi.redhat.com/job/installer.next/job/galleon/lastSuccessfulBuild/artifact/mvn-repo/</url>
-      <layout>default</layout>
-      <releases>
-        <enabled>true</enabled>
-        <updatePolicy>never</updatePolicy>
-      </releases>
-      <snapshots>
-        <enabled>true</enabled>
-        <updatePolicy>never</updatePolicy>
-      </snapshots>
-    </repository>
   </repositories>
   <pluginRepositories>
     <pluginRepository>
