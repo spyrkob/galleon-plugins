@@ -188,6 +188,8 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
     private ArtifactResolver artifactResolver;
     private boolean channelArtifactResolution;
 
+    private InstallationMavenCache installationMavenCache;
+
     @Override
     protected List<ProvisioningOption> initPluginOptions() {
         return Arrays.asList(OPTION_MVN_DIST, OPTION_DUMP_CONFIG_SCRIPTS,
@@ -269,6 +271,8 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
     @Override
     public void postInstall(ProvisioningRuntime runtime) throws ProvisioningException {
 
+        // TODO: only init the cache if the cache BOM export is enabled
+        installationMavenCache = new InstallationMavenCache(runtime.getStagedDir());
         final long startTime = runtime.isLogTime() ? System.nanoTime() : -1;
         this.runtime = runtime;
         log = runtime.getMessageWriter();
@@ -532,6 +536,13 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
             for(int i = 0; i < finalizingTasks.size(); ++i) {
                 finalizingTasks.get(i).execute(this, finalizingTasksPkgs.get(i));
             }
+        }
+
+        // TODO: only record if the cache BOM export is enabled
+        try {
+            installationMavenCache.write();
+        } catch (IOException e) {
+            throw new ProvisioningException("Failed to export installation's BOM", e);
         }
 
         if(!exampleConfigs.isEmpty()) {
@@ -917,7 +928,7 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
                     moduleTemplate,
                     versionProps, channelArtifactResolution);
         } else {
-            processor = new FatModuleTemplateProcessor(this, artifactInstaller, targetDir, moduleTemplate, versionProps, transformationMavenRepo, channelArtifactResolution);
+            processor = new FatModuleTemplateProcessor(this, artifactInstaller, targetDir, moduleTemplate, versionProps, transformationMavenRepo, channelArtifactResolution, installationMavenCache);
         }
         processor.process();
         moduleTemplate.store();
@@ -983,6 +994,8 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
                 Utils.extractArtifact(jarSrc, jarTarget, copyArtifact);
             } else {
                 IoUtils.copy(jarSrc, jarTarget);
+                // TODO: only record if the cache BOM export is enabled
+                installationMavenCache.addRecord(artifact, location);
             }
             if(schemaGroups.contains(artifact.getGroupId())) {
                 extractSchemas(jarSrc);

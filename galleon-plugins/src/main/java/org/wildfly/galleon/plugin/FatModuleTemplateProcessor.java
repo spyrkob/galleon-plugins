@@ -35,13 +35,16 @@ import org.jboss.galleon.universe.maven.MavenUniverseException;
 class FatModuleTemplateProcessor extends AbstractModuleTemplateProcessor {
 
     private final Path localCache;
+    private final InstallationMavenCache mavenCache;
 
     public FatModuleTemplateProcessor(WfInstallPlugin plugin, AbstractArtifactInstaller installer,
             Path targetPath, ModuleTemplate template,
             Map<String, String> versionProps,
-            Path localCache, boolean channelArtifactResolution) {
+            Path localCache, boolean channelArtifactResolution,
+            InstallationMavenCache mavenCache) {
         super(plugin, installer, targetPath, template, versionProps, channelArtifactResolution);
         this.localCache = localCache;
+        this.mavenCache = mavenCache;
     }
 
     @Override
@@ -59,6 +62,7 @@ class FatModuleTemplateProcessor extends AbstractModuleTemplateProcessor {
             finalFileName = target.getName();
         } else {
             finalFileName = getInstaller().installArtifactFat(artifact.getMavenArtifact(), getTargetDir(), localCache);
+            mavenCache.addRecord(artifact.getMavenArtifact(), getTargetDir().resolve(artifact.getMavenArtifact().getArtifactFileName()).toString());
         }
         artifact.updateFatArtifact(finalFileName);
     }
