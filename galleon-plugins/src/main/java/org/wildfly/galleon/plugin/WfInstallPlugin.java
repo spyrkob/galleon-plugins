@@ -415,20 +415,11 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
             }
             final ProgressTracker<PackageRuntime> modulesTracker = layoutFactory.getProgressTracker("JBMODULES");
             modulesTracker.starting(jbossModules.size());
-            List<MavenArtifact> allModuleArtifacts = new ArrayList<>();
-            for (Map.Entry<Path, PackageRuntime> entry : jbossModules.entrySet()) {
-                final PackageRuntime pkg = entry.getValue();
-                try {
-                    allModuleArtifacts.addAll(findArtifacts(pkg, entry.getKey()));
-                } catch (IOException e) {
-                    throw new ProvisioningException("Failed to process JBoss module XML template for feature-pack "
-                                                       + pkg.getFeaturePackRuntime().getFPID() + " package " + pkg.getName(), e);
-                }
-            }
 
             log.verbose("Preloading artifacts");
+            List<MavenArtifact> allModuleArtifacts = listMavenArtifactsInModules();
             try {
-                resolveAll(allModuleArtifacts);
+                this.artifactCache = resolveAll(allModuleArtifacts);
             } catch (MavenUniverseException e) {
                 throw new ProvisioningException("Failed to resolve artifact", e);
             }
@@ -552,7 +543,49 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
         }
     }
 
-    private void resolveAll(List<MavenArtifact> allModuleArtifacts) throws MavenUniverseException {
+    private List<MavenArtifact> listMavenArtifactsInModules() throws ProvisioningException {
+        List<MavenArtifact> allModuleArtifacts = new ArrayList<>();
+        for (Entry<Path, PackageRuntime> entry : jbossModules.entrySet()) {
+            final PackageRuntime pkg = entry.getValue();
+            try {
+                allModuleArtifacts.addAll(findArtifacts(pkg, entry.getKey()));
+            } catch (IOException e) {
+                throw new ProvisioningException("Failed to process JBoss module XML template for feature-pack "
+                                                   + pkg.getFeaturePackRuntime().getFPID() + " package " + pkg.getName(), e);
+            }
+        }
+        return allModuleArtifacts;
+    }
+
+    private List<MavenArtifact> findArtifacts(PackageRuntime pkg, Path moduleXmlRelativePath) throws ProvisioningException, IOException {
+        final Path moduleTemplateFile = pkg.getResource(WfConstants.PM, WfConstants.WILDFLY, WfConstants.MODULE).resolve(moduleXmlRelativePath);
+        final Path targetPath = runtime.getStagedDir().resolve(moduleXmlRelativePath.toString());
+        final Map<String, String> versionProps = fpArtifactVersions.get(pkg.getFeaturePackRuntime().getFPID().getProducer());
+        ModuleTemplate moduleTemplate = new ModuleTemplate(pkg, moduleTemplateFile, targetPath);
+        if (!moduleTemplate.isModule()) {
+            return Collections.emptyList();
+        }
+
+        final Elements artifacts = moduleTemplate.getArtifacts();
+        if (artifacts == null) {
+            return Collections.emptyList();
+        }
+
+        List<MavenArtifact> res = new ArrayList<>();
+        final int artifactCount = artifacts.size();
+        for (int i = 0; i < artifactCount; i++) {
+            final AbstractModuleTemplateProcessor.ModuleArtifact moduleArtifact = new AbstractModuleTemplateProcessor.ModuleArtifact(artifacts.get(i), versionProps, log, artifactInstaller);
+            final MavenArtifact mavenArtifact = moduleArtifact.getUnresolvedArtifact();
+            if (mavenArtifact != null) {
+                res.add(mavenArtifact);
+            }
+        }
+
+        return res;
+    }
+
+    private Map<MavenArtifact, MavenArtifact> resolveAll(List<MavenArtifact> allModuleArtifacts) throws MavenUniverseException {
+        Map<MavenArtifact, MavenArtifact> artifactCache = new HashMap<>();
         for (MavenArtifact a : allModuleArtifacts) {
             final MavenArtifact b = new MavenArtifact();
             b.setGroupId(a.getGroupId());
@@ -564,6 +597,8 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
             artifactCache.put(b, a);
         }
         maven.resolveAll(allModuleArtifacts);
+
+        return artifactCache;
     }
 
     private void setupLayerDirectory(Path layersConf, Path layersDir) throws ProvisioningException {
@@ -921,33 +956,6 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
         }
     }
 
-    private List<MavenArtifact> findArtifacts(PackageRuntime pkg, Path moduleXmlRelativePath) throws ProvisioningException, IOException {
-        final Path moduleTemplateFile = pkg.getResource(WfConstants.PM, WfConstants.WILDFLY, WfConstants.MODULE).resolve(moduleXmlRelativePath);
-        final Path targetPath = runtime.getStagedDir().resolve(moduleXmlRelativePath.toString());
-        final Map<String, String> versionProps = fpArtifactVersions.get(pkg.getFeaturePackRuntime().getFPID().getProducer());
-        ModuleTemplate moduleTemplate = new ModuleTemplate(pkg, moduleTemplateFile, targetPath);
-        if (!moduleTemplate.isModule()) {
-            return Collections.emptyList();
-        }
-
-        final Elements artifacts = moduleTemplate.getArtifacts();
-        if (artifacts == null) {
-            return Collections.emptyList();
-        }
-
-        List<MavenArtifact> res = new ArrayList<>();
-        final int artifactCount = artifacts.size();
-        for (int i = 0; i < artifactCount; i++) {
-            final AbstractModuleTemplateProcessor.ModuleArtifact moduleArtifact = new AbstractModuleTemplateProcessor.ModuleArtifact(artifacts.get(i), versionProps, log, artifactInstaller);
-            final MavenArtifact mavenArtifact = moduleArtifact.getUnresolvedArtifact();
-            if (mavenArtifact != null) {
-                res.add(mavenArtifact);
-            }
-        }
-
-        return res;
-    }
-
     private void processModuleTemplate(PackageRuntime pkg, Path moduleXmlRelativePath) throws ProvisioningException, IOException {
         final Path moduleTemplateFile = pkg.getResource(WfConstants.PM, WfConstants.WILDFLY, WfConstants.MODULE).resolve(moduleXmlRelativePath);
         final Path targetPath = runtime.getStagedDir().resolve(moduleXmlRelativePath.toString());
@@ -1199,7 +1207,6 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
             artifact.setVersion(resolvedArtifact.getVersion());
             artifact.setPath(resolvedArtifact.getPath());
         } else {
-            System.out.println("not found in cache " + artifact);
             maven.resolve(artifact);
         }
     }
