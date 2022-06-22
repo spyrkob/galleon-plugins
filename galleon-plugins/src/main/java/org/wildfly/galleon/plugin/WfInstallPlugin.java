@@ -148,6 +148,7 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
             .setBooleanValueSet()
             .build();
     private static final ProvisioningOption OPTION_OVERRIDDEN_ARTIFACTS = ProvisioningOption.builder("jboss-overridden-artifacts").setPersistent(true).build();
+    private static final ProvisioningOption OPTION_BULK_DOWNLOAD_ARTIFACTS = ProvisioningOption.builder("bulk-download-artifacts").setBooleanValueSet().build();
     private ProvisioningRuntime runtime;
     MessageWriter log;
 
@@ -188,13 +189,16 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
     private AbstractArtifactInstaller artifactInstaller;
     private ArtifactResolver artifactResolver;
 
+    private boolean bulkResolveArtifacts = false;
+
     private Map<MavenArtifact, MavenArtifact> artifactCache = new HashMap<>();
 
     @Override
     protected List<ProvisioningOption> initPluginOptions() {
         return Arrays.asList(OPTION_MVN_DIST, OPTION_DUMP_CONFIG_SCRIPTS,
                 OPTION_FORK_EMBEDDED, OPTION_MVN_REPO, OPTION_JAKARTA_TRANSFORM_ARTIFACTS,
-                OPTION_MVN_PROVISIONING_REPO, OPTION_JAKARTA_TRANSFORM_ARTIFACTS_VERBOSE, OPTION_OVERRIDDEN_ARTIFACTS);
+                OPTION_MVN_PROVISIONING_REPO, OPTION_JAKARTA_TRANSFORM_ARTIFACTS_VERBOSE,
+                OPTION_OVERRIDDEN_ARTIFACTS, OPTION_BULK_DOWNLOAD_ARTIFACTS);
     }
 
     public ProvisioningRuntime getRuntime() {
@@ -272,6 +276,8 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
         this.runtime = runtime;
         log = runtime.getMessageWriter();
         log.verbose("WildFly Galleon Installation Plugin");
+
+        this.bulkResolveArtifacts = Boolean.parseBoolean(runtime.getOptionValue(OPTION_BULK_DOWNLOAD_ARTIFACTS, "false"));
 
         thinServer = isThinServer();
         generatedMavenRepo = getGeneratedMavenRepo();
@@ -416,14 +422,16 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
             final ProgressTracker<PackageRuntime> modulesTracker = layoutFactory.getProgressTracker("JBMODULES");
             modulesTracker.starting(jbossModules.size());
 
-            log.verbose("Preloading artifacts");
-            List<MavenArtifact> allModuleArtifacts = listMavenArtifactsInModules();
-            try {
-                this.artifactCache = resolveAll(allModuleArtifacts);
-            } catch (MavenUniverseException e) {
-                throw new ProvisioningException("Failed to resolve artifact", e);
+            if (bulkResolveArtifacts) {
+                log.verbose("Preloading artifacts");
+                List<MavenArtifact> allModuleArtifacts = listMavenArtifactsInModules();
+                try {
+                    this.artifactCache = resolveAll(allModuleArtifacts);
+                } catch (MavenUniverseException e) {
+                    throw new ProvisioningException("Failed to resolve artifact", e);
+                }
+                log.verbose("Finished preloading artifacts");
             }
-            log.verbose("Finished preloading artifacts");
 
             for (Map.Entry<Path, PackageRuntime> entry : jbossModules.entrySet()) {
                 final PackageRuntime pkg = entry.getValue();
@@ -1202,7 +1210,7 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
     }
 
     void resolveMaven(MavenArtifact artifact) throws ProvisioningException {
-        if (artifactCache.containsKey(artifact)) {
+        if (bulkResolveArtifacts && artifactCache.containsKey(artifact)) {
             final MavenArtifact resolvedArtifact = artifactCache.get(artifact);
             artifact.setVersion(resolvedArtifact.getVersion());
             artifact.setPath(resolvedArtifact.getPath());
