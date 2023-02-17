@@ -73,6 +73,7 @@ import org.jboss.galleon.diff.FsDiff;
 import org.jboss.galleon.layout.ProvisioningLayoutFactory;
 import org.jboss.galleon.plugin.InstallPlugin;
 import org.jboss.galleon.plugin.ProvisioningPluginWithOptions;
+import org.jboss.galleon.progresstracking.ProgressCallback;
 import org.jboss.galleon.progresstracking.ProgressTracker;
 import org.jboss.galleon.runtime.FeaturePackRuntime;
 import org.jboss.galleon.runtime.PackageRuntime;
@@ -98,6 +99,7 @@ import org.wildfly.galleon.plugin.config.XslTransform;
  */
 public class WfInstallPlugin extends ProvisioningPluginWithOptions implements InstallPlugin {
 
+    private static final String TRACK_MODULES_BUILD = "JBMODULES";
     private Optional<ArtifactRecorder> artifactRecorder;
 
     interface ArtifactResolver {
@@ -362,7 +364,7 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
         }
         pkgProgressTracker.complete();
         if (!jbossModules.isEmpty()) {
-            final ProgressTracker<PackageRuntime> modulesTracker = layoutFactory.getProgressTracker("JBMODULES");
+            final ProgressTracker<PackageRuntime> modulesTracker = layoutFactory.getProgressTracker(TRACK_MODULES_BUILD);
             modulesTracker.starting(jbossModules.size());
 
             if (bulkResolveArtifacts) {
@@ -551,10 +553,35 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
     private void provisionExampleConfigs() throws ProvisioningException {
 
         final Path examplesTmp = runtime.getTmpPath("example-configs");
+        final ProvisioningLayoutFactory factory = runtime.getLayout().getFactory();
+        final ProgressTracker<String> examplesTracker = factory.getProgressTracker("JBEXAMPLES");
+        final List<String> trackedPhases = List.of(ProvisioningLayoutFactory.TRACK_LAYOUT_BUILD, ProvisioningLayoutFactory.TRACK_PACKAGES,
+                TRACK_MODULES_BUILD, ProvisioningLayoutFactory.TRACK_CONFIGS);
+        examplesTracker.starting(trackedPhases.size() + 1);
+        final ProgressCallback<Object> aggregatingCallback = new ProgressCallback<>() {
+            private int counter = 0;
+            @Override
+            public void starting(ProgressTracker<Object> progressTracker) {
+                examplesTracker.processing("Build examples server: " + trackedPhases.get(counter));
+            }
+
+            @Override
+            public void pulse(ProgressTracker<Object> progressTracker) {
+
+            }
+
+            @Override
+            public void complete(ProgressTracker<Object> progressTracker) {
+                examplesTracker.processed("Build examples server: " + trackedPhases.get(counter));
+                counter++;
+            }
+        };
+        trackedPhases.forEach((p)->factory.setProgressCallback(p, aggregatingCallback));
+
         final ProvisioningManager pm = ProvisioningManager.builder()
                 .setInstallationHome(examplesTmp)
                 .setMessageWriter(log)
-                .setLayoutFactory(runtime.getLayout().getFactory())
+                .setLayoutFactory(factory)
                 .setRecordState(false)
                 .build();
 
@@ -618,6 +645,7 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
             throw new ProvisioningException("Failed to generate example configs", e);
         }
 
+        examplesTracker.processing("Copy generated examples");
         final Path exampleConfigsDir = runtime.getStagedDir().resolve(WfConstants.DOCS).resolve("examples").resolve("configs");
         for(Path configPath : configPaths) {
             try {
@@ -626,6 +654,8 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
                 throw new ProvisioningException(Errors.copyFile(configPath, exampleConfigsDir.resolve(configPath.getFileName())), e);
             }
         }
+        examplesTracker.processed("Copy generated examples");
+        examplesTracker.complete();
     }
 
     private void generateConfigs(ProvisioningRuntime runtime) throws ProvisioningException {
