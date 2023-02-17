@@ -39,6 +39,7 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashMap;
@@ -100,6 +101,7 @@ import org.wildfly.galleon.plugin.config.XslTransform;
 public class WfInstallPlugin extends ProvisioningPluginWithOptions implements InstallPlugin {
 
     private static final String TRACK_MODULES_BUILD = "JBMODULES";
+    private static final String TRACK_ARTIFACTS_RESOLVE = "JB_ARTIFACTS_RESOLVE";
     private Optional<ArtifactRecorder> artifactRecorder;
 
     interface ArtifactResolver {
@@ -364,15 +366,19 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
         }
         pkgProgressTracker.complete();
         if (!jbossModules.isEmpty()) {
-            final ProgressTracker<PackageRuntime> modulesTracker = layoutFactory.getProgressTracker(TRACK_MODULES_BUILD);
-            modulesTracker.starting(jbossModules.size());
 
             if (bulkResolveArtifacts) {
                 log.verbose("Preloading artifacts");
+                final ProgressTracker<MavenArtifact> artifactTracker = layoutFactory.getProgressTracker(TRACK_ARTIFACTS_RESOLVE);
                 populateArtifactCache();
-                resolveArtifactsInCache();
+                artifactTracker.starting(artifactCache.size());
+                resolveArtifactsInCache(artifactTracker);
+                artifactTracker.complete();
                 log.verbose("Finished preloading artifacts");
             }
+
+            final ProgressTracker<PackageRuntime> modulesTracker = layoutFactory.getProgressTracker(TRACK_MODULES_BUILD);
+            modulesTracker.starting(jbossModules.size());
 
             for (Map.Entry<Path, PackageRuntime> entry : jbossModules.entrySet()) {
                 final PackageRuntime pkg = entry.getValue();
@@ -505,12 +511,16 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
         }
     }
 
-    private void resolveArtifactsInCache() throws ProvisioningException {
+    private void resolveArtifactsInCache(ProgressTracker<MavenArtifact> tracker) throws ProvisioningException {
         try {
-            maven.resolveAll(artifactCache.values());
+            maven.resolveAll(addListener(artifactCache.values(), tracker));
         } catch (MavenUniverseException e) {
             throw new ProvisioningException("Failed to resolve artifact", e);
         }
+    }
+
+    private Collection<MavenArtifact> addListener(Collection<MavenArtifact> values, ProgressTracker<MavenArtifact> tracker) {
+        return values.stream().map((a)->new MonitorableArtifact(a, tracker)).collect(Collectors.toList());
     }
 
     private void setupLayerDirectory(Path layersConf, Path layersDir) throws ProvisioningException {
