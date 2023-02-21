@@ -101,6 +101,7 @@ import org.wildfly.galleon.plugin.config.XslTransform;
 public class WfInstallPlugin extends ProvisioningPluginWithOptions implements InstallPlugin {
 
     private static final String TRACK_MODULES_BUILD = "JBMODULES";
+    private static final String TRACK_COPY_CONFIGS = "JBCOPYCONFIGS";
     private static final String TRACK_ARTIFACTS_RESOLVE = "JB_ARTIFACTS_RESOLVE";
     private Optional<ArtifactRecorder> artifactRecorder;
 
@@ -262,7 +263,6 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
      */
     @Override
     public void postInstall(ProvisioningRuntime runtime) throws ProvisioningException {
-
         final long startTime = runtime.isLogTime() ? System.nanoTime() : -1;
         this.runtime = runtime;
         log = runtime.getMessageWriter();
@@ -564,15 +564,15 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
 
         final Path examplesTmp = runtime.getTmpPath("example-configs");
         final ProvisioningLayoutFactory factory = runtime.getLayout().getFactory();
-        final ProgressTracker<String> examplesTracker = factory.getProgressTracker("JBEXAMPLES");
+        final ProgressTracker<List<Object>> examplesTracker = factory.getProgressTracker("JBEXTRACONFIGS");
         final List<String> trackedPhases = List.of(ProvisioningLayoutFactory.TRACK_LAYOUT_BUILD, ProvisioningLayoutFactory.TRACK_PACKAGES,
                 TRACK_MODULES_BUILD, ProvisioningLayoutFactory.TRACK_CONFIGS);
-        examplesTracker.starting(trackedPhases.size() + 1);
         final ProgressCallback<Object> aggregatingCallback = new ProgressCallback<>() {
             private int counter = 0;
             @Override
-            public void starting(ProgressTracker<Object> progressTracker) {
-                examplesTracker.processing("Build examples server: " + trackedPhases.get(counter));
+            public void processing(ProgressTracker<Object> progressTracker) {
+                Object item = progressTracker.getItem();
+                examplesTracker.processing(Arrays.asList(trackedPhases.get(counter),item));
             }
 
             @Override
@@ -582,8 +582,13 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
 
             @Override
             public void complete(ProgressTracker<Object> progressTracker) {
-                examplesTracker.processed("Build examples server: " + trackedPhases.get(counter));
+                Object item = progressTracker.getItem();
+                examplesTracker.processed(Arrays.asList(trackedPhases.get(counter),item));
                 counter++;
+            }
+
+            @Override
+            public void starting(ProgressTracker<Object> pt) {
             }
         };
         trackedPhases.forEach((p)->factory.setProgressCallback(p, aggregatingCallback));
@@ -655,16 +660,15 @@ public class WfInstallPlugin extends ProvisioningPluginWithOptions implements In
             throw new ProvisioningException("Failed to generate example configs", e);
         }
 
-        examplesTracker.processing("Copy generated examples");
         final Path exampleConfigsDir = runtime.getStagedDir().resolve(WfConstants.DOCS).resolve("examples").resolve("configs");
         for(Path configPath : configPaths) {
+            examplesTracker.processing(Arrays.asList(TRACK_COPY_CONFIGS, configPath));
             try {
                 IoUtils.copy(configPath, exampleConfigsDir.resolve(configPath.getFileName()));
             } catch (IOException e) {
                 throw new ProvisioningException(Errors.copyFile(configPath, exampleConfigsDir.resolve(configPath.getFileName())), e);
             }
         }
-        examplesTracker.processed("Copy generated examples");
         examplesTracker.complete();
     }
 
